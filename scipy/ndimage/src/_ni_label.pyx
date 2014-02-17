@@ -198,6 +198,9 @@ cdef np.uintp_t label_line_with_neighbor(np.uintp_t *line,
                     next_region += 1
     return next_region
 
+######################################################################
+# Label one line of input
+######################################################################
 cdef np.uintp_t label_line(PyArrayIterObject *ito,
                            PyArrayIterObject *itstruct,
                            int num_neighbors,
