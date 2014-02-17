@@ -198,6 +198,95 @@ cdef np.uintp_t label_line_with_neighbor(np.uintp_t *line,
                     next_region += 1
     return next_region
 
+cdef np.uintp_t label_line(PyArrayIterObject *ito,
+                           PyArrayIterObject *itstruct,
+                           int num_neighbors,
+                           int ss,
+                           int so,
+                           np.ndarray structure,
+                           np.ndarray output,
+                           int axis,
+                           read_line_func_t read_line,
+                           np.uintp_t *neighbor_buffer,
+                           int L,
+                           np.uintp_t * line_buffer,
+                           bint use_previous,
+                           np.uintp_t next_region,
+                           np.uintp_t *mergetable,
+                           int mergetable_size,
+                           bint *needs_self_labeling) nogil:
+    cdef:
+        np.intp_t total_offset, delta, i
+        bint valid
+        np.int_t neighbor_use_prev, neighbor_use_adjacent, neighbor_use_next
+        int ni
+
+    needs_self_labeling[0] = True
+
+    # Take neighbor labels
+    PyArray_ITER_RESET(itstruct)
+    for ni in range(num_neighbors):
+        neighbor_use_prev = (<np.int_t *> PyArray_ITER_DATA(itstruct))[0]
+        neighbor_use_adjacent = (<np.int_t *> (<char *> PyArray_ITER_DATA(itstruct) + ss))[0]
+        neighbor_use_next = (<np.int_t *> (<char *> PyArray_ITER_DATA(itstruct) + 2 * ss))[0]
+        with gil:
+            logger.debug("ni: %d" % ni)
+            logger.debug("prev, adj, next: %d, %d, %d" % (neighbor_use_prev, neighbor_use_adjacent, neighbor_use_next))
+
+        if not (neighbor_use_prev or
+                neighbor_use_adjacent or
+                neighbor_use_next):
+            PyArray_ITER_NEXT(itstruct)
+            continue
+
+        # Check that the neighbor line is in bounds
+        valid = True
+        total_offset = 0
+        for idim in range(structure.ndim):
+            if idim == axis:
+                continue
+            delta = (itstruct.coordinates[idim] - 1)  # 1,1,1... is center
+            if not (0 <= (ito.coordinates[idim] + delta) < output.shape[idim]):
+                valid = False
+                break
+            total_offset += delta * output.strides[idim]
+
+        if valid:
+            # Optimization (see above) - for 2D, line_buffer
+            # becomes next iteration's neighbor buffer, so no
+            # need to read it here.
+            if output.ndim != 2:
+                <char *> PyArray_ITER_DATA(ito) + total_offset
+                read_line(<char *> PyArray_ITER_DATA(ito) + total_offset, so,
+                          neighbor_buffer, L)
+
+            with gil:
+                for i in xrange(L):
+                    logger.debug("neighbor buffer[%d] = %d" % (i, neighbor_buffer[i]))
+
+            # be conservative about how much space we may need
+            while mergetable_size < (next_region + L):
+                mergetable_size *= 2
+                mergetable = <np.uintp_t *> \
+                    PyDataMem_RENEW(<void *> mergetable,
+                                     mergetable_size * sizeof(np.uintp_t))
+
+            next_region = label_line_with_neighbor(line_buffer,
+                                                  neighbor_buffer,
+                                                  neighbor_use_prev,
+                                                  neighbor_use_adjacent,
+                                                  neighbor_use_next,
+                                                  L,
+                                                  ni == (num_neighbors - 1),
+                                                  use_previous,
+                                                  next_region,
+                                                  mergetable)
+            if ni == (num_neighbors - 1):
+                needs_self_labeling[0] = False
+        PyArray_ITER_NEXT(itstruct)
+    return next_region
+
+
 ######################################################################
 # Label regions
 ######################################################################
@@ -245,11 +334,10 @@ cpdef _label(np.ndarray input,
             <write_line_func_t> <void *> <Py_intptr_t> get_write_line(output.take([0]))
         np.flatiter _iti, _ito, _itstruct
         PyArrayIterObject *iti, *ito, *itstruct
-        int axis, idim, num_neighbors, ni
-        np.intp_t L, delta, i
+        int axis, idim, num_neighbors 
+        np.intp_t L, i
         np.intp_t si, so, ss
-        np.intp_t total_offset
-        bint needs_self_labeling, valid, center, use_previous, overflowed
+        bint needs_self_labeling, center, use_previous, overflowed
         np.ndarray _line_buffer, _neighbor_buffer
         np.uintp_t *line_buffer, *neighbor_buffer, *tmp
         np.uintp_t next_region, src_label, dest_label
@@ -324,68 +412,11 @@ cpdef _label(np.ndarray input,
                 # copy nonzero values in input to line_buffer as FOREGROUND
                 nonzero_line(PyArray_ITER_DATA(iti), si, line_buffer, L)
 
-                needs_self_labeling = True
-
-                # Take neighbor labels
-                PyArray_ITER_RESET(itstruct)
-                for ni in range(num_neighbors):
-                    neighbor_use_prev = (<np.int_t *> PyArray_ITER_DATA(itstruct))[0]
-                    neighbor_use_adjacent = (<np.int_t *> (<char *> PyArray_ITER_DATA(itstruct) + ss))[0]
-                    neighbor_use_next = (<np.int_t *> (<char *> PyArray_ITER_DATA(itstruct) + 2 * ss))[0]
-                    with gil:
-                        logger.debug("ni: %d" % ni)
-                        logger.debug("prev, adj, next: %d, %d, %d" % (neighbor_use_prev, neighbor_use_adjacent, neighbor_use_next))
-
-                    if not (neighbor_use_prev or
-                            neighbor_use_adjacent or
-                            neighbor_use_next):
-                        PyArray_ITER_NEXT(itstruct)
-                        continue
-
-                    # Check that the neighbor line is in bounds
-                    valid = True
-                    total_offset = 0
-                    for idim in range(structure.ndim):
-                        if idim == axis:
-                            continue
-                        delta = (itstruct.coordinates[idim] - 1)  # 1,1,1... is center
-                        if not (0 <= (ito.coordinates[idim] + delta) < output.shape[idim]):
-                            valid = False
-                            break
-                        total_offset += delta * output.strides[idim]
-
-                    if valid:
-                        # Optimization (see above) - for 2D, line_buffer
-                        # becomes next iteration's neighbor buffer, so no
-                        # need to read it here.
-                        if output.ndim != 2:
-                            read_line(<char *> PyArray_ITER_DATA(ito) + total_offset, so,
-                                      neighbor_buffer, L)
-
-                        with gil:
-                            for i in xrange(L):
-                                logger.debug("neighbor buffer[%d] = %d" % (i, neighbor_buffer[i]))
-
-                        # be conservative about how much space we may need
-                        while mergetable_size < (next_region + L):
-                            mergetable_size *= 2
-                            mergetable = <np.uintp_t *> \
-                                PyDataMem_RENEW(<void *> mergetable,
-                                                 mergetable_size * sizeof(np.uintp_t))
-
-                        next_region = label_line_with_neighbor(line_buffer,
-                                                              neighbor_buffer,
-                                                              neighbor_use_prev,
-                                                              neighbor_use_adjacent,
-                                                              neighbor_use_next,
-                                                              L,
-                                                              ni == (num_neighbors - 1),
-                                                              use_previous,
-                                                              next_region,
-                                                              mergetable)
-                        if ni == (num_neighbors - 1):
-                            needs_self_labeling = False
-                    PyArray_ITER_NEXT(itstruct)
+                next_region = label_line(ito, itstruct, num_neighbors, ss, so,
+                                         structure, output, axis, read_line,
+                                         neighbor_buffer, L, line_buffer,
+                                         use_previous, next_region, mergetable,
+                                         mergetable_size, &needs_self_labeling)
 
                 if needs_self_labeling:
                     # We didn't call label_line_with_neighbor above with
