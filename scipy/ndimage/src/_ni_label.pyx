@@ -7,6 +7,8 @@ cimport cython
 from cython cimport sizeof
 import numpy as np
 cimport numpy as np
+import logging
+logger = logging.getLogger(__name__)
 
 np.import_array()
 
@@ -259,6 +261,8 @@ cpdef _label(np.ndarray input,
     _iti = np.PyArray_IterAllButAxis(input, &axis)
     _itstruct = np.PyArray_IterAllButAxis(structure, &axis)
 
+    logger.debug("axis: %d" % (axis))
+
     ito = <PyArrayIterObject *> _ito
     iti = <PyArrayIterObject *> _iti
     itstruct = <PyArrayIterObject *> _itstruct
@@ -267,6 +271,9 @@ cpdef _label(np.ndarray input,
     # reaching the center, where we stop
     num_neighbors = (structure.size / 3) // 2
 
+    logger.debug("structure.size: %d" % (structure.size))
+    logger.debug("num_neighbors: %d" % (num_neighbors))
+
     # Create two buffer arrays for reading/writing labels.
     # Add an entry at the end and beginning to simplify some bounds checks.
     L = input.shape[axis]
@@ -274,6 +281,8 @@ cpdef _label(np.ndarray input,
     _neighbor_buffer = np.empty(L + 2, dtype=np.uintp)
     line_buffer = <np.uintp_t *> _line_buffer.data
     neighbor_buffer = <np.uintp_t *> _neighbor_buffer.data
+
+    logger.debug("L: %d" % L)
 
     # Add fenceposts with background values
     line_buffer[0] = neighbor_buffer[0] = BACKGROUND
@@ -301,6 +310,7 @@ cpdef _label(np.ndarray input,
         temp = [1] * structure.ndim
         temp[axis] = 0
         use_previous = (structure[tuple(temp)] != 0)
+        logger.debug("use previous: %d" % use_previous)
 
         with nogil:
             while PyArray_ITER_NOTDONE(iti):
@@ -322,6 +332,10 @@ cpdef _label(np.ndarray input,
                     neighbor_use_prev = (<np.int_t *> PyArray_ITER_DATA(itstruct))[0]
                     neighbor_use_adjacent = (<np.int_t *> (<char *> PyArray_ITER_DATA(itstruct) + ss))[0]
                     neighbor_use_next = (<np.int_t *> (<char *> PyArray_ITER_DATA(itstruct) + 2 * ss))[0]
+                    with gil:
+                        logger.debug("ni: %d" % ni)
+                        logger.debug("prev, adj, next: %d, %d, %d" % (neighbor_use_prev, neighbor_use_adjacent, neighbor_use_next))
+
                     if not (neighbor_use_prev or
                             neighbor_use_adjacent or
                             neighbor_use_next):
@@ -347,6 +361,10 @@ cpdef _label(np.ndarray input,
                         if output.ndim != 2:
                             read_line(<char *> PyArray_ITER_DATA(ito) + total_offset, so,
                                       neighbor_buffer, L)
+
+                        with gil:
+                            for i in xrange(L):
+                                logger.debug("neighbor buffer[%d] = %d" % (i, neighbor_buffer[i]))
 
                         # be conservative about how much space we may need
                         while mergetable_size < (next_region + L):
