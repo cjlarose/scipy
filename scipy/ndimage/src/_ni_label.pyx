@@ -215,8 +215,8 @@ cdef np.uintp_t label_line(PyArrayIterObject *ito,
                            np.uintp_t * line_buffer,
                            bint use_previous,
                            np.uintp_t next_region,
-                           np.uintp_t *mergetable,
-                           int mergetable_size,
+                           np.uintp_t **mergetable,
+                           int *mergetable_size,
                            bint *needs_self_labeling) nogil:
     cdef:
         np.intp_t total_offset, delta, i
@@ -234,7 +234,7 @@ cdef np.uintp_t label_line(PyArrayIterObject *ito,
         neighbor_use_next = (<np.int_t *> (<char *> PyArray_ITER_DATA(itstruct) + 2 * ss))[0]
         with gil:
             logger.debug("ni: %d" % ni)
-            logger.debug("prev, adj, next: %d, %d, %d" % (neighbor_use_prev, neighbor_use_adjacent, neighbor_use_next))
+            #print "prev, adj, next: %d, %d, %d" % (neighbor_use_prev, neighbor_use_adjacent, neighbor_use_next)
 
         if not (neighbor_use_prev or
                 neighbor_use_adjacent or
@@ -268,11 +268,11 @@ cdef np.uintp_t label_line(PyArrayIterObject *ito,
                     logger.debug("neighbor buffer[%d] = %d" % (i, neighbor_buffer[i]))
 
             # be conservative about how much space we may need
-            while mergetable_size < (next_region + L):
-                mergetable_size *= 2
-                mergetable = <np.uintp_t *> \
-                    PyDataMem_RENEW(<void *> mergetable,
-                                     mergetable_size * sizeof(np.uintp_t))
+            while mergetable_size[0] < (next_region + L):
+                mergetable_size[0] *= 2
+                mergetable[0] = <np.uintp_t *> \
+                    PyDataMem_RENEW(<void *> mergetable[0],
+                                     mergetable_size[0] * sizeof(np.uintp_t))
 
             next_region = label_line_with_neighbor(line_buffer,
                                                   neighbor_buffer,
@@ -283,7 +283,7 @@ cdef np.uintp_t label_line(PyArrayIterObject *ito,
                                                   ni == (num_neighbors - 1),
                                                   use_previous,
                                                   next_region,
-                                                  mergetable)
+                                                  mergetable[0])
             if ni == (num_neighbors - 1):
                 needs_self_labeling[0] = False
         PyArray_ITER_NEXT(itstruct)
@@ -418,8 +418,8 @@ cpdef _label(np.ndarray input,
                 next_region = label_line(ito, itstruct, num_neighbors, ss, so,
                                          structure, output, axis, read_line,
                                          neighbor_buffer, L, line_buffer,
-                                         use_previous, next_region, mergetable,
-                                         mergetable_size, &needs_self_labeling)
+                                         use_previous, next_region, &mergetable,
+                                         &mergetable_size, &needs_self_labeling)
 
                 if needs_self_labeling:
                     # We didn't call label_line_with_neighbor above with
