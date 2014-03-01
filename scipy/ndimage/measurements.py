@@ -42,6 +42,10 @@ __all__ = ['label', 'find_objects', 'labeled_comprehension', 'sum', 'mean',
            'minimum_position', 'maximum_position', 'extrema', 'center_of_mass',
            'histogram', 'watershed_ift']
 
+def generate_cython(structure):
+    structure = numpy.asarray(structure, dtype=bool)
+    program = _ni_label._generate_bee(structure, 1)
+    print(program)
 
 def label(input, structure=None, output=None):
     """

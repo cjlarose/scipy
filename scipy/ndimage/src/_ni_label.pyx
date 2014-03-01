@@ -8,6 +8,7 @@ from cython cimport sizeof
 import numpy as np
 cimport numpy as np
 import logging
+import StringIO
 logger = logging.getLogger(__name__)
 
 np.import_array()
@@ -168,13 +169,13 @@ cdef inline np.uintp_t take_label_or_merge(np.uintp_t cur_label,
 # Label one line of input, using a neighbor line that has already been labeled.
 ######################################################################
 cdef np.uintp_t label_line_with_neighbor(np.uintp_t *line,
-                                         np.uintp_t *neighbor,
-                                         int neighbor_use_previous,
-                                         int neighbor_use_adjacent,
-                                         int neighbor_use_next,
+                                         np.uintp_t *neighbor, # known 
+                                         int neighbor_use_previous, # known 
+                                         int neighbor_use_adjacent, # known 
+                                         int neighbor_use_next, # known
                                          np.intp_t L,
-                                         bint label_unlabeled,
-                                         bint use_previous,
+                                         bint label_unlabeled, # known 
+                                         bint use_previous, #known
                                          np.uintp_t next_region,
                                          np.uintp_t *mergetable) nogil:
     cdef:
@@ -259,7 +260,6 @@ cdef np.uintp_t label_line(PyArrayIterObject *ito,
             # becomes next iteration's neighbor buffer, so no
             # need to read it here.
             if output.ndim != 2:
-                <char *> PyArray_ITER_DATA(ito) + total_offset
                 read_line(<char *> PyArray_ITER_DATA(ito) + total_offset, so,
                           neighbor_buffer, L)
 
@@ -404,7 +404,7 @@ cpdef _label(np.ndarray input,
         logger.debug("use previous: %d" % use_previous)
 
         with nogil:
-            while PyArray_ITER_NOTDONE(iti):
+            while PyArray_ITER_NOTDONE(iti): # every vector in input
                 # Optimization - for 2D, line_buffer becomes next iteration's
                 # neighbor buffer
                 if output.ndim == 2:
@@ -484,3 +484,121 @@ cpdef _label(np.ndarray input,
 
     PyDataMem_FREE(<void *> mergetable)
     return dest_label - 1
+
+######################################################################
+# Begin Code generation
+######################################################################
+check_valid = """
+    # Check that the neighbor line is in bounds
+    valid = True
+    total_offset = 0
+    for idim in range(structure.ndim):
+        if idim == axis:
+            continue
+        delta = (itstruct.coordinates[idim] - 1)  # 1,1,1... is center
+        if not (0 <= (ito.coordinates[idim] + delta) < output.shape[idim]):
+            valid = False
+            break
+        total_offset += delta * output.strides[idim]
+
+    if valid:
+        # Optimization (see above) - for 2D, line_buffer
+        # becomes next iteration's neighbor buffer, so no
+        # need to read it here.
+        if output.ndim != 2:
+            <char *> PyArray_ITER_DATA(ito) + total_offset
+            read_line(<char *> PyArray_ITER_DATA(ito) + total_offset, so,
+                      neighbor_buffer, L)
+
+        # be conservative about how much space we may need
+        while mergetable_size[0] < (next_region + L):
+            mergetable_size[0] *= 2
+            mergetable[0] = <np.uintp_t *> \
+                PyDataMem_RENEW(<void *> mergetable[0],
+                                 mergetable_size[0] * sizeof(np.uintp_t))
+    """
+
+def specialized_label_line_with_neighbor(output, neighbor_use_previous,
+    neighbor_use_adjacent, neighbor_use_next, label_unlabeled,
+    use_previous):
+
+    output.write("for i in range(L):")
+    output.write("    if line[i] != BACKGROUND:")
+    # See allocation of line_buffer for why this is valid when i = 0
+    if neighbor_use_previous:
+        output.write("line[i] = take_label_or_merge(line[i], neighbor[i - 1], mergetable)")
+    if neighbor_use_adjacent:
+        output.write("line[i] = take_label_or_merge(line[i], neighbor[i], mergetable)")
+    if neighbor_use_next:
+        output.write("line[i] = take_label_or_merge(line[i], neighbor[i + 1], mergetable)")
+    if label_unlabeled:
+        if use_previous:
+            output.write("line[i] = take_label_or_merge(line[i], line[i - 1], mergetable)")
+        output.write("if line[i] == FOREGROUND:  # still needs a label")
+        output.write("    line[i] = next_region")
+        output.write("    mergetable[next_region] = next_region")
+        output.write("    next_region += 1")
+
+# Assume structure, and itstruct
+
+cpdef _generate_bee(np.ndarray structure, int axis):
+    cdef:
+        int num_neighbors, ni
+        np.flatiter _itstruct
+        PyArrayIterObject *itstruct
+        np.intp_t ss
+
+
+    _itstruct = np.PyArray_IterAllButAxis(structure, &axis)
+    itstruct = <PyArrayIterObject *> _itstruct
+
+    output = StringIO.StringIO()
+    output.write('First line.\n')
+
+    ss = structure.strides[axis]
+
+    # Used for labeling single lines
+    temp = [1] * structure.ndim
+    temp[axis] = 0
+    use_previous = (structure[tuple(temp)] != 0)
+
+    # output.write("    PyArray_ITER_RESET(itstructu)")
+    num_neighbors = (structure.size / 3) // 2
+
+    output.write("""
+    cdef np.uintp_t label_line(PyArrayIterObject *ito,
+                               int so,
+                               np.ndarray output,
+                               read_line_func_t read_line,
+                               np.uintp_t *neighbor_buffer,
+                               int L,
+                               np.uintp_t * line_buffer,
+                               np.uintp_t next_region,
+                               np.uintp_t **mergetable,
+                               int *mergetable_size,
+                               bint *needs_self_labeling) nogil:""")
+
+
+    output.write("""        cdef:
+        np.uintp_t i""")
+
+    PyArray_ITER_RESET(itstruct)
+    for ni in range(num_neighbors):
+        neighbor_use_prev = (<np.int_t *> PyArray_ITER_DATA(itstruct))[0]
+        neighbor_use_adjacent = (<np.int_t *> (<char *> PyArray_ITER_DATA(itstruct) + ss))[0]
+        neighbor_use_next = (<np.int_t *> (<char *> PyArray_ITER_DATA(itstruct) + 2 * ss))[0]
+        if not (neighbor_use_prev or
+                neighbor_use_adjacent or
+                neighbor_use_next):
+            PyArray_ITER_NEXT(itstruct)
+
+        output.write(check_valid)
+
+        output.write(specialized_label_line_with_neighbor(output,
+            neighbor_use_prev, neighbor_use_adjacent, neighbor_use_next, 
+            ni == (num_neighbors - 1), use_previous))
+
+    contents = output.getvalue()
+    output.close()
+
+    return contents
