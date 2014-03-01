@@ -576,7 +576,8 @@ cdef np.uintp_t label_line(PyArrayIterObject *ito,
                            int *mergetable_size,
                            bint *needs_self_labeling) nogil:
     cdef:
-        np.uintp_t i
+        np.uintp_t total_ffset, delta, i
+        bint valid
 """)
 
     PyArray_ITER_RESET(itstruct)
