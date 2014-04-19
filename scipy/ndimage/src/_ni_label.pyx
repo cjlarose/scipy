@@ -488,55 +488,28 @@ cpdef _label(np.ndarray input,
 ######################################################################
 # Begin Code generation
 ######################################################################
-check_valid = """
-    # Check that the neighbor line is in bounds
-    valid = True
-    total_offset = 0
-    for idim in range(structure.ndim):
-        if idim == axis:
-            continue
-        delta = (itstruct.coordinates[idim] - 1)  # 1,1,1... is center
-        if not (0 <= (ito.coordinates[idim] + delta) < output.shape[idim]):
-            valid = False
-            break
-        total_offset += delta * output.strides[idim]
-
-    if valid:
-        # Optimization (see above) - for 2D, line_buffer
-        # becomes next iteration's neighbor buffer, so no
-        # need to read it here.
-        if output.ndim != 2:
-            read_line(<char *> PyArray_ITER_DATA(ito) + total_offset, so,
-                      neighbor_buffer, L)
-
-        # be conservative about how much space we may need
-        while mergetable_size[0] < (next_region + L):
-            mergetable_size[0] *= 2
-            mergetable[0] = <np.uintp_t *> \\
-                PyDataMem_RENEW(<void *> mergetable[0],
-                                 mergetable_size[0] * sizeof(np.uintp_t))
-    """
 
 def specialized_label_line_with_neighbor(output, neighbor_use_previous,
     neighbor_use_adjacent, neighbor_use_next, label_unlabeled,
     use_previous):
 
     output.write("for i in range(L):\n")
-    output.write("        if line[i] != BACKGROUND:\n")
+    output.write("            if line[i] != BACKGROUND:\n")
     # See allocation of line_buffer for why this is valid when i = 0
     if neighbor_use_previous:
-        output.write("            line[i] = take_label_or_merge(line[i], neighbor_buffer[i - 1], mergetable)\n")
+        output.write("                line[i] = take_label_or_merge(line[i], neighbor_buffer[i - 1], mergetable)\n")
     if neighbor_use_adjacent:
-        output.write("            line[i] = take_label_or_merge(line[i], neighbor_buffer[i], mergetable)\n")
+        output.write("                line[i] = take_label_or_merge(line[i], neighbor_buffer[i], mergetable)\n")
     if neighbor_use_next:
-        output.write("            line[i] = take_label_or_merge(line[i], neighbor_buffer[i + 1], mergetable)\n")
+        output.write("                line[i] = take_label_or_merge(line[i], neighbor_buffer[i + 1], mergetable)\n")
     if label_unlabeled:
         if use_previous:
-            output.write("            line[i] = take_label_or_merge(line[i], line[i - 1], mergetable)\n")
-        output.write("            if line[i] == FOREGROUND:  # still needs a label\n")
-        output.write("                line[i] = next_region\n")
-        output.write("                mergetable[next_region] = next_region\n")
-        output.write("                next_region += 1\n")
+            output.write("                line[i] = take_label_or_merge(line[i], line[i - 1], mergetable)\n")
+        output.write("                if line[i] == FOREGROUND:  # still needs a label\n")
+        output.write("                    line[i] = next_region\n")
+        output.write("                    mergetable[next_region] = next_region\n")
+        output.write("                    next_region += 1\n")
+
 
 # Assume structure, and itstruct
 
@@ -576,7 +549,7 @@ cdef np.uintp_t label_line(PyArrayIterObject *ito,
                            int *mergetable_size,
                            bint *needs_self_labeling) nogil:
     cdef:
-        np.uintp_t total_ffset, delta, i
+        np.uintp_t total_offset, delta, i
         bint valid
 """)
 
@@ -585,16 +558,53 @@ cdef np.uintp_t label_line(PyArrayIterObject *ito,
         neighbor_use_prev = (<np.int_t *> PyArray_ITER_DATA(itstruct))[0]
         neighbor_use_adjacent = (<np.int_t *> (<char *> PyArray_ITER_DATA(itstruct) + ss))[0]
         neighbor_use_next = (<np.int_t *> (<char *> PyArray_ITER_DATA(itstruct) + 2 * ss))[0]
+
+        output.write("    # ni: %d, prev: %d, adj: %d, next: %d\n" % (ni, neighbor_use_prev, neighbor_use_adjacent, neighbor_use_next))
         if not (neighbor_use_prev or
                 neighbor_use_adjacent or
                 neighbor_use_next):
             PyArray_ITER_NEXT(itstruct)
+            continue
 
-        output.write(check_valid)
+        output.write("    # Check that the neighbor line is in bounds\n")
+        output.write("    valid = True\n")
+        output.write("    total_offset = 0\n")
+
+        deltas = [(idim, itstruct.coordinates[idim] - 1)
+            for idim in range(structure.ndim) if idim != axis]
+        output.write("    deltas = [%s]\n" % ",".join(["(%d, %d)" % (idim, coord) for (idim, coord) in deltas]))
+
+        output.write("""
+    for (idim, d) in deltas:
+        if not (0 <= (ito.coordinates[idim] + delta) < output.shape[idim])
+            valid = False
+            break
+        total_offset += d * output.strides[idim]
+
+    if valid:
+        # Optimization (see above) - for 2D, line_buffer
+        # becomes next iteration's neighbor buffer, so no
+        # need to read it here.
+        if output.ndim != 2:
+            read_line(<char *> PyArray_ITER_DATA(ito) + total_offset, so,
+                      neighbor_buffer, L)
+
+        # be conservative about how much space we may need
+        while mergetable_size[0] < (next_region + L):
+            mergetable_size[0] *= 2
+            mergetable[0] = <np.uintp_t *> \\
+                PyDataMem_RENEW(<void *> mergetable[0],
+                                 mergetable_size[0] * sizeof(np.uintp_t))
+        """)
 
         output.write(specialized_label_line_with_neighbor(output,
             neighbor_use_prev, neighbor_use_adjacent, neighbor_use_next, 
             ni == (num_neighbors - 1), use_previous))
+
+        if ni == (num_neighbors - 1):
+            output.write("        needs_self_labeling[0] = False\n")
+        PyArray_ITER_NEXT(itstruct)
+    output.write("    return next_region\n")
 
     contents = output.getvalue()
     output.close()
