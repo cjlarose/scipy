@@ -494,19 +494,19 @@ def specialized_label_line_with_neighbor(output, neighbor_use_previous,
     use_previous):
 
     output.write("for i in range(L):\n")
-    output.write("            if line[i] != BACKGROUND:\n")
+    output.write("            if line_buffer[i] != BACKGROUND:\n")
     # See allocation of line_buffer for why this is valid when i = 0
     if neighbor_use_previous:
-        output.write("                line[i] = take_label_or_merge(line[i], neighbor_buffer[i - 1], mergetable)\n")
+        output.write("                line_buffer[i] = take_label_or_merge(line_buffer[i], neighbor_buffer[i - 1], mergetable)\n")
     if neighbor_use_adjacent:
-        output.write("                line[i] = take_label_or_merge(line[i], neighbor_buffer[i], mergetable)\n")
+        output.write("                line_buffer[i] = take_label_or_merge(line_buffer[i], neighbor_buffer[i], mergetable)\n")
     if neighbor_use_next:
-        output.write("                line[i] = take_label_or_merge(line[i], neighbor_buffer[i + 1], mergetable)\n")
+        output.write("                line_buffer[i] = take_label_or_merge(line_buffer[i], neighbor_buffer[i + 1], mergetable)\n")
     if label_unlabeled:
         if use_previous:
-            output.write("                line[i] = take_label_or_merge(line[i], line[i - 1], mergetable)\n")
-        output.write("                if line[i] == FOREGROUND:  # still needs a label\n")
-        output.write("                    line[i] = next_region\n")
+            output.write("                line_buffer[i] = take_label_or_merge(line_buffer[i], line_buffer[i - 1], mergetable)\n")
+        output.write("                if line_buffer[i] == FOREGROUND:  # still needs a label\n")
+        output.write("                    line_buffer[i] = next_region\n")
         output.write("                    mergetable[next_region] = next_region\n")
         output.write("                    next_region += 1\n")
 
@@ -551,6 +551,7 @@ cdef np.uintp_t label_line(PyArrayIterObject *ito,
     cdef:
         np.uintp_t total_offset, delta, i
         bint valid
+        int idim
 """)
 
     PyArray_ITER_RESET(itstruct)
@@ -575,11 +576,11 @@ cdef np.uintp_t label_line(PyArrayIterObject *ito,
         output.write("    deltas = [%s]\n" % ",".join(["(%d, %d)" % (idim, coord) for (idim, coord) in deltas]))
 
         output.write("""
-    for (idim, d) in deltas:
-        if not (0 <= (ito.coordinates[idim] + delta) < output.shape[idim])
+    for (idim, delta) in deltas:
+        if not (0 <= (ito.coordinates[idim] + delta) < output.shape[idim]):
             valid = False
             break
-        total_offset += d * output.strides[idim]
+        total_offset += delta * output.strides[idim]
 
     if valid:
         # Optimization (see above) - for 2D, line_buffer
