@@ -493,7 +493,7 @@ def specialized_label_line_with_neighbor(output, neighbor_use_previous,
     neighbor_use_adjacent, neighbor_use_next, label_unlabeled,
     use_previous):
 
-    output.write("for i in range(L):\n")
+    output.write("        for i in range(L):\n")
     output.write("            if line_buffer[i] != BACKGROUND:\n")
     # See allocation of line_buffer for why this is valid when i = 0
     if neighbor_use_previous:
@@ -603,16 +603,29 @@ cdef np.uintp_t label_line(PyArrayIterObject *ito,
             mergetable_size[0] *= 2
             mergetable[0] = <np.uintp_t *> \\
                 PyDataMem_RENEW(<void *> mergetable[0],
-                                 mergetable_size[0] * sizeof(np.uintp_t))
-        """)
+                                 mergetable_size[0] * sizeof(np.uintp_t))\n""")
 
-        output.write(specialized_label_line_with_neighbor(output,
+        specialized_label_line_with_neighbor(output,
             neighbor_use_prev, neighbor_use_adjacent, neighbor_use_next, 
-            ni == (num_neighbors - 1), use_previous))
+            ni == (num_neighbors - 1), use_previous)
 
         if ni == (num_neighbors - 1):
             output.write("        needs_self_labeling = False\n")
         PyArray_ITER_NEXT(itstruct)
+
+    output.write("""
+    if needs_self_labeling:
+        # We didn't call label_line_with_neighbor above with
+        # label_unlabeled=True, so call it now in such a way as to
+        # cause unlabeled regions to get a label.
+        while mergetable_size[0] < (next_region + L):
+                mergetable_size[0] *= 2
+                mergetable[0] = <np.uintp_t *> \\
+                    PyDataMem_RENEW(<void *> mergetable[0],
+                                     mergetable_size[0] * sizeof(np.uintp_t))\n""")
+
+    specialized_label_line_with_neighbor(output,
+        False, False, False, True, use_previous)
     output.write("    return next_region\n")
 
     contents = output.getvalue()
