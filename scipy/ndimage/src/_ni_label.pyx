@@ -553,6 +553,7 @@ cdef np.uintp_t label_line(PyArrayIterObject *ito,
         bint valid
         int idim
 """)
+    output.write("        int deltas[%d]" % structure.ndim)
 
     PyArray_ITER_RESET(itstruct)
     for ni in range(num_neighbors):
@@ -571,12 +572,13 @@ cdef np.uintp_t label_line(PyArrayIterObject *ito,
         output.write("    valid = True\n")
         output.write("    total_offset = 0\n")
 
-        deltas = [(idim, itstruct.coordinates[idim] - 1)
-            for idim in range(structure.ndim) if idim != axis]
-        output.write("    deltas = [%s]\n" % ",".join(["(%d, %d)" % (idim, coord) for (idim, coord) in deltas]))
+        deltas = [itstruct.coordinates[idim] - 1
+            for idim in range(structure.ndim)]
+        deltas[axis] = 0
+        output.write("    deltas = [%s]\n" % ",".join([str(d) for d in deltas]))
 
         output.write("""
-    for (idim, delta) in deltas:
+    for delta in deltas:
         if not (0 <= (ito.coordinates[idim] + delta) < output.shape[idim]):
             valid = False
             break
