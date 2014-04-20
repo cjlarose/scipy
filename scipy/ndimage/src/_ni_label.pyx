@@ -217,15 +217,14 @@ cdef np.uintp_t label_line(PyArrayIterObject *ito,
                            bint use_previous,
                            np.uintp_t next_region,
                            np.uintp_t **mergetable,
-                           int *mergetable_size,
-                           bint *needs_self_labeling) nogil:
+                           int *mergetable_size) nogil:
     cdef:
         np.intp_t total_offset, delta, i
-        bint valid
+        bint valid, needs_self_labeling
         np.int_t neighbor_use_prev, neighbor_use_adjacent, neighbor_use_next
         int ni
 
-    needs_self_labeling[0] = True
+    needs_self_labeling = True
 
     # Take neighbor labels
     PyArray_ITER_RESET(itstruct)
@@ -285,8 +284,28 @@ cdef np.uintp_t label_line(PyArrayIterObject *ito,
                                                   next_region,
                                                   mergetable[0])
             if ni == (num_neighbors - 1):
-                needs_self_labeling[0] = False
+                needs_self_labeling = False
         PyArray_ITER_NEXT(itstruct)
+
+    if needs_self_labeling:
+        # We didn't call label_line_with_neighbor above with
+        # label_unlabeled=True, so call it now in such a way as to
+        # cause unlabeled regions to get a label.
+        while mergetable_size[0] < (next_region + L):
+                mergetable_size[0] *= 2
+                mergetable[0] = <np.uintp_t *> \
+                    PyDataMem_RENEW(<void *> mergetable[0],
+                                     mergetable_size[0] * sizeof(np.uintp_t))
+
+        next_region = label_line_with_neighbor(line_buffer,
+                                              neighbor_buffer,
+                                              False, False, False,  # no neighbors
+                                              L,
+                                              True,
+                                              use_previous,
+                                              next_region,
+                                              mergetable[0])
+
     return next_region
 
 
@@ -340,7 +359,7 @@ cpdef _label(np.ndarray input,
         int axis, idim, num_neighbors 
         np.intp_t L, i
         np.intp_t si, so, ss
-        bint needs_self_labeling, center, use_previous, overflowed
+        bint center, use_previous, overflowed
         np.ndarray _line_buffer, _neighbor_buffer
         np.uintp_t *line_buffer, *neighbor_buffer, *tmp
         np.uintp_t next_region, src_label, dest_label
@@ -419,26 +438,7 @@ cpdef _label(np.ndarray input,
                                          structure, output, axis, read_line,
                                          neighbor_buffer, L, line_buffer,
                                          use_previous, next_region, &mergetable,
-                                         &mergetable_size, &needs_self_labeling)
-
-                if needs_self_labeling:
-                    # We didn't call label_line_with_neighbor above with
-                    # label_unlabeled=True, so call it now in such a way as to
-                    # cause unlabeled regions to get a label.
-                    while mergetable_size < (next_region + L):
-                            mergetable_size *= 2
-                            mergetable = <np.uintp_t *> \
-                                PyDataMem_RENEW(<void *> mergetable,
-                                                 mergetable_size * sizeof(np.uintp_t))
-
-                    next_region = label_line_with_neighbor(line_buffer,
-                                                          neighbor_buffer,
-                                                          False, False, False,  # no neighbors
-                                                          L,
-                                                          True,
-                                                          use_previous,
-                                                          next_region,
-                                                          mergetable)
+                                         &mergetable_size)
 
                 overflowed = write_line(PyArray_ITER_DATA(ito), so,
                                         line_buffer, L)
