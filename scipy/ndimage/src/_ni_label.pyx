@@ -497,17 +497,17 @@ def specialized_label_line_with_neighbor(output, neighbor_use_previous,
     output.write("            if line_buffer[i] != BACKGROUND:\n")
     # See allocation of line_buffer for why this is valid when i = 0
     if neighbor_use_previous:
-        output.write("                line_buffer[i] = take_label_or_merge(line_buffer[i], neighbor_buffer[i - 1], mergetable)\n")
+        output.write("                line_buffer[i] = take_label_or_merge(line_buffer[i], neighbor_buffer[i - 1], mergetable[0])\n")
     if neighbor_use_adjacent:
-        output.write("                line_buffer[i] = take_label_or_merge(line_buffer[i], neighbor_buffer[i], mergetable)\n")
+        output.write("                line_buffer[i] = take_label_or_merge(line_buffer[i], neighbor_buffer[i], mergetable[0])\n")
     if neighbor_use_next:
-        output.write("                line_buffer[i] = take_label_or_merge(line_buffer[i], neighbor_buffer[i + 1], mergetable)\n")
+        output.write("                line_buffer[i] = take_label_or_merge(line_buffer[i], neighbor_buffer[i + 1], mergetable[0])\n")
     if label_unlabeled:
         if use_previous:
-            output.write("                line_buffer[i] = take_label_or_merge(line_buffer[i], line_buffer[i - 1], mergetable)\n")
+            output.write("                line_buffer[i] = take_label_or_merge(line_buffer[i], line_buffer[i - 1], mergetable[0])\n")
         output.write("                if line_buffer[i] == FOREGROUND:  # still needs a label\n")
         output.write("                    line_buffer[i] = next_region\n")
-        output.write("                    mergetable[next_region] = next_region\n")
+        output.write("                    mergetable[0][next_region] = next_region\n")
         output.write("                    next_region += 1\n")
 
 
@@ -546,11 +546,10 @@ cdef np.uintp_t label_line(PyArrayIterObject *ito,
                            np.uintp_t * line_buffer,
                            np.uintp_t next_region,
                            np.uintp_t **mergetable,
-                           int *mergetable_size,
-                           bint *needs_self_labeling) nogil:
+                           int *mergetable_size) nogil:
     cdef:
         np.uintp_t total_offset, delta, i
-        bint valid
+        bint valid, needs_self_labeling
         int idim
 """)
 
@@ -612,7 +611,7 @@ cdef np.uintp_t label_line(PyArrayIterObject *ito,
             ni == (num_neighbors - 1), use_previous))
 
         if ni == (num_neighbors - 1):
-            output.write("        needs_self_labeling[0] = False\n")
+            output.write("        needs_self_labeling = False\n")
         PyArray_ITER_NEXT(itstruct)
     output.write("    return next_region\n")
 
